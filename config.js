@@ -19,7 +19,7 @@
 
 window.GI_CONFIG = {
     // 👇 שנה את זה ל-Client ID שקיבלת מ-Google Cloud
-    GOOGLE_CLIENT_ID: "YOUR_GOOGLE_CLIENT_ID_HERE.apps.googleusercontent.com",
+    GOOGLE_CLIENT_ID: "451411309606-3m2ip3on5sbtnq3rhpjapfsnc81rumo9.apps.googleusercontent.com",ntent.com",
 
     // 👇 אופציונלי - שם החברה שיופיע בכותרת (שנה אם רוצים)
     COMPANY_NAME: "G-Inspector",
