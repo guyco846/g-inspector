@@ -2725,6 +2725,12 @@ const App = {
 
         count.textContent = State.currentTour.items.length;
 
+        // Show the photo manager button only when there's at least one item
+        const photoBtn = document.getElementById('photoManageBtn');
+        if (photoBtn) {
+            photoBtn.style.display = State.currentTour.items.length > 0 ? '' : 'none';
+        }
+
         if (State.currentTour.items.length === 0) {
             container.innerHTML = '';
             empty.style.display = 'block';
@@ -2739,7 +2745,7 @@ const App = {
                 <div style="width: 100%; margin-bottom: 4px;">
                     <div style="font-size: 11px; color: #6B7280; padding: 4px 8px;">${this.escapeHtml(category)}</div>
                     ${phrases.map(p =>
-                        `<span class="template-chip" onclick="App.applyTemplate('${item.id}', '${this.escapeAttr(p)}')">${this.escapeHtml(p)}</span>`
+                        `<span class="template-chip" onclick="App.applyTemplate('${item.id}', '${this.escapeJs(p)}')">${this.escapeHtml(p)}</span>`
                     ).join('')}
                 </div>
             `).join('');
@@ -2897,14 +2903,14 @@ const App = {
     },
 
     buildTemplateManagerHtml() {
-        const categoriesHtml = Object.entries(TEMPLATE_BANK).map(([category, phrases]) => `
+        const categoriesHtml = Object.entries(TEMPLATE_BANK).map(([category, phrases], catIdx) => `
             <div style="border: 1px solid var(--color-border); border-radius: var(--radius); margin-bottom: 12px; overflow: hidden;">
                 <div style="background: #F9FAFB; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--color-border);">
                     <strong style="color: var(--color-primary);">${this.escapeHtml(category)}</strong>
                     <div style="display: flex; gap: 6px;">
-                        <button class="btn btn-secondary btn-sm" onclick="App.renameTemplateCategory('${this.escapeAttr(category)}')"
+                        <button class="btn btn-secondary btn-sm" onclick="App.renameTemplateCategory('${this.escapeJs(category)}')"
                                 title="שנה שם" style="padding: 4px 8px; font-size: 12px;">✏️</button>
-                        <button class="btn btn-danger btn-sm" onclick="App.deleteTemplateCategory('${this.escapeAttr(category)}')"
+                        <button class="btn btn-danger btn-sm" onclick="App.deleteTemplateCategory('${this.escapeJs(category)}')"
                                 title="מחק קטגוריה" style="padding: 4px 8px; font-size: 12px;">🗑</button>
                     </div>
                 </div>
@@ -2912,17 +2918,17 @@ const App = {
                     ${phrases.map((phrase, phraseIdx) => `
                         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; padding: 6px; background: white; border: 1px solid #F3F4F6; border-radius: 6px;">
                             <span style="flex: 1; font-size: 13px;">${this.escapeHtml(phrase)}</span>
-                            <button class="btn btn-secondary btn-sm" onclick="App.editTemplatePhrase('${this.escapeAttr(category)}', ${phraseIdx})"
+                            <button class="btn btn-secondary btn-sm" onclick="App.editTemplatePhrase('${this.escapeJs(category)}', ${phraseIdx})"
                                     style="padding: 2px 6px; font-size: 11px;" title="ערוך">✏️</button>
-                            <button class="btn btn-danger btn-sm" onclick="App.deleteTemplatePhrase('${this.escapeAttr(category)}', ${phraseIdx})"
+                            <button class="btn btn-danger btn-sm" onclick="App.deleteTemplatePhrase('${this.escapeJs(category)}', ${phraseIdx})"
                                     style="padding: 2px 6px; font-size: 11px;" title="מחק">✕</button>
                         </div>
                     `).join('')}
                     <div style="display: flex; gap: 6px; margin-top: 8px;">
-                        <input type="text" class="form-input" id="newPhrase-${this.escapeAttr(category)}"
+                        <input type="text" class="form-input" id="newPhrase-${catIdx}"
                                placeholder="תבנית חדשה..." style="font-size: 13px;"
-                               onkeydown="if(event.key==='Enter'){App.addPhraseToCategory('${this.escapeAttr(category)}')}">
-                        <button class="btn btn-success btn-sm" onclick="App.addPhraseToCategory('${this.escapeAttr(category)}')">
+                               onkeydown="if(event.key==='Enter'){App.addPhraseToCategory('${this.escapeJs(category)}', ${catIdx})}">
+                        <button class="btn btn-success btn-sm" onclick="App.addPhraseToCategory('${this.escapeJs(category)}', ${catIdx})">
                             + הוסף
                         </button>
                     </div>
@@ -3024,8 +3030,8 @@ const App = {
         this.refreshTemplateManager();
     },
 
-    addPhraseToCategory(category) {
-        const input = document.getElementById(`newPhrase-${category}`);
+    addPhraseToCategory(category, catIdx) {
+        const input = document.getElementById(`newPhrase-${catIdx}`);
         if (!input) return;
 
         const phrase = input.value.trim();
@@ -3321,7 +3327,7 @@ const App = {
 
         input.value = '';
         this.refreshColumnsManager();
-        Toast.success(`העמודה "${name}" תוסף לכל סיור חדש`);
+        Toast.success(`העמודה "${name}" תתווסף לכל סיור חדש`);
     },
 
     renameDefaultColumn(colId, newName) {
@@ -3387,6 +3393,10 @@ const App = {
                 this.renderItems();
                 this.markDirty();
                 Toast.success('תמונה נוספה');
+                // Keep an open photo-manager modal in sync
+                if (document.getElementById('photoManagerGrid')) {
+                    this.refreshPhotoManager();
+                }
             }
 
             this._photoTargetItemId = null;
@@ -3425,6 +3435,65 @@ const App = {
         item.photoName = null;
         this.renderItems();
         this.markDirty();
+        // Keep an open photo-manager modal in sync
+        if (document.getElementById('photoManagerGrid')) {
+            this.refreshPhotoManager();
+        }
+    },
+
+    // ============ Photo Manager ============
+    // Gallery view of all item photos with quick replace/remove in one place.
+
+    openPhotoManager() {
+        Modal.show(
+            '🖼️ ניהול תמונות',
+            this.buildPhotoManagerHtml(),
+            `<button class="btn btn-secondary" onclick="App.closeModal()">סגור</button>`
+        );
+    },
+
+    buildPhotoManagerHtml() {
+        const items = (State.currentTour && State.currentTour.items) || [];
+
+        if (items.length === 0) {
+            return '<div style="text-align: center; color: #6B7280; padding: 24px;">אין פריטים בסיור זה</div>';
+        }
+
+        const cards = items.map(item => {
+            const label = `פריט ${item.number}${item.location ? ' · ' + this.escapeHtml(item.location) : ''}`;
+            const media = item.photoData
+                ? `<img src="${item.photoData}" style="width: 100%; height: 120px; object-fit: cover; border-radius: 6px; display: block;">`
+                : `<div style="width: 100%; height: 120px; border-radius: 6px; background: #F3F4F6; display: flex; align-items: center; justify-content: center; color: #9CA3AF; font-size: 13px;">ללא תמונה</div>`;
+
+            const actions = item.photoData
+                ? `<button class="btn btn-secondary btn-sm" onclick="App.attachPhoto('${item.id}')" style="flex: 1; font-size: 12px;">🔄 החלף</button>
+                   <button class="btn btn-danger btn-sm" onclick="App.removePhoto('${item.id}')" style="flex: 1; font-size: 12px;">🗑 הסר</button>`
+                : `<button class="btn btn-secondary btn-sm" onclick="App.attachPhoto('${item.id}')" style="flex: 1; font-size: 12px;">📷 הוסף תמונה</button>`;
+
+            return `
+                <div style="border: 1px solid #E5E7EB; border-radius: 8px; padding: 8px; background: white;">
+                    ${media}
+                    <div style="font-size: 12px; color: #374151; margin: 6px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${label}</div>
+                    <div style="display: flex; gap: 6px;">${actions}</div>
+                </div>
+            `;
+        }).join('');
+
+        const withPhotos = items.filter(i => i.photoData).length;
+
+        return `
+            <div style="font-size: 13px; color: #6B7280; margin-bottom: 12px;">
+                ${withPhotos} מתוך ${items.length} פריטים כוללים תמונה
+            </div>
+            <div id="photoManagerGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; max-height: 60vh; overflow-y: auto;">
+                ${cards}
+            </div>
+        `;
+    },
+
+    refreshPhotoManager() {
+        const modalBody = document.getElementById('modalBody');
+        if (modalBody) modalBody.innerHTML = this.buildPhotoManagerHtml();
     },
 
     // ============ Recipients ============
@@ -3620,6 +3689,26 @@ const App = {
     escapeAttr(text) {
         if (text === null || text === undefined) return '';
         return String(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    },
+
+    /**
+     * Escape a value for safe embedding inside a single-quoted JS string
+     * that itself lives inside a double-quoted HTML attribute (e.g. onclick).
+     * First JS-escape (backslash, quote, newlines), then HTML-escape so it
+     * survives the attribute parse. Order matters: & must be escaped first.
+     */
+    escapeJs(text) {
+        if (text === null || text === undefined) return '';
+        const jsEscaped = String(text)
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'")
+            .replace(/\r/g, '\\r')
+            .replace(/\n/g, '\\n');
+        return jsEscaped
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
     }
 };
 
