@@ -2424,8 +2424,11 @@ const App = {
         if (State.tours.length === 0) {
             this.newTour();
         } else {
-            // Load most recent tour
-            this.loadTour(State.tours[0].id);
+            // Load most recent tour (by last update, not insertion order)
+            const mostRecent = [...State.tours].sort((a, b) =>
+                new Date(b.updatedAt) - new Date(a.updatedAt)
+            )[0];
+            this.loadTour(mostRecent.id);
         }
 
         // Auto-save every 30 seconds
@@ -2489,6 +2492,18 @@ const App = {
     },
 
     // ============ Views ============
+
+    /** Re-render whichever view is currently active (used after language switch) */
+    refreshUI() {
+        const listActive = document.getElementById('viewList').classList.contains('active');
+        if (listActive) {
+            this.renderTourList();
+        } else if (State.currentTour) {
+            this.renderParticipants();
+            this.renderItems();
+            this.renderRecipients();
+        }
+    },
 
     showEditor() {
         document.getElementById('viewList').classList.remove('active');
