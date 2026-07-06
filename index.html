@@ -2061,9 +2061,19 @@ const PDFGenerator = {
         await this.waitForImages(renderDiv);
 
         try {
+            const scale = 2;
+
+            // Measure safe break points BEFORE rasterizing: the top edge of every
+            // item row (in canvas pixels). We only ever cut a page at one of these
+            // boundaries, so a row/photo is never sliced across two pages.
+            const containerTop = renderDiv.getBoundingClientRect().top;
+            const rowTops = Array.from(renderDiv.querySelectorAll('.pdf-item-row')).map(
+                row => (row.getBoundingClientRect().top - containerTop) * scale
+            );
+
             // Render to canvas
             const canvas = await html2canvas(renderDiv, {
-                scale: 2,
+                scale: scale,
                 useCORS: true,
                 logging: false,
                 backgroundColor: '#ffffff'
@@ -2080,24 +2090,61 @@ const PDFGenerator = {
             const pageWidth = pdf.internal.pageSize.getWidth();   // 210mm
             const pageHeight = pdf.internal.pageSize.getHeight(); // 297mm
 
-            const imgWidth = pageWidth;
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            // How many canvas pixels fit on one PDF page (canvas is scaled to page width)
+            const pxPerPage = (canvas.width * pageHeight) / pageWidth;
 
-            const totalPages = Math.ceil(imgHeight / pageHeight);
-            let heightLeft = imgHeight;
-            let position = 0;
+            // Candidate break points: every row top, plus the very end of the canvas.
+            const breakPoints = rowTops.filter(y => y > 0);
+            breakPoints.push(canvas.height);
 
-            // Add first page
-            pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, position, imgWidth, imgHeight);
-            heightLeft -= pageHeight;
-
-            // Add subsequent pages
-            while (heightLeft > 0) {
-                position = heightLeft - imgHeight;
-                pdf.addPage();
-                pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, position, imgWidth, imgHeight);
-                heightLeft -= pageHeight;
+            // Walk down the canvas, emitting one page at a time. For each page, take
+            // the furthest safe break point that still fits within pxPerPage. If a
+            // single row is taller than a page (can't happen with a safe break),
+            // fall back to a hard cut so we always make forward progress.
+            const pageSlices = [];
+            let sliceStart = 0;
+            const EPS = 1; // tolerate sub-pixel rounding
+            while (sliceStart < canvas.height - EPS) {
+                const maxEnd = sliceStart + pxPerPage;
+                let sliceEnd = 0;
+                for (const bp of breakPoints) {
+                    if (bp > sliceStart + EPS && bp <= maxEnd + EPS && bp > sliceEnd) {
+                        sliceEnd = bp;
+                    }
+                }
+                // No break point fits (a row taller than a page): hard-cut at page height.
+                if (sliceEnd <= sliceStart + EPS) {
+                    sliceEnd = Math.min(maxEnd, canvas.height);
+                }
+                pageSlices.push([sliceStart, sliceEnd]);
+                sliceStart = sliceEnd;
             }
+
+            // Render each slice onto its own page from a per-slice sub-canvas so the
+            // image height matches the slice exactly (no bleed onto the next page).
+            pageSlices.forEach(([start, end], idx) => {
+                const sliceHeightPx = Math.round(end - start);
+                if (sliceHeightPx <= 0) return;
+
+                const sliceCanvas = document.createElement('canvas');
+                sliceCanvas.width = canvas.width;
+                sliceCanvas.height = sliceHeightPx;
+                const ctx = sliceCanvas.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+                ctx.drawImage(
+                    canvas,
+                    0, Math.round(start), canvas.width, sliceHeightPx,
+                    0, 0, canvas.width, sliceHeightPx
+                );
+
+                const sliceHeightMm = (sliceHeightPx * pageWidth) / canvas.width;
+                if (idx > 0) pdf.addPage();
+                pdf.addImage(
+                    sliceCanvas.toDataURL('image/jpeg', 0.92),
+                    'JPEG', 0, 0, pageWidth, sliceHeightMm
+                );
+            });
 
             // Add page numbers (in Latin chars to avoid encoding issues)
             const pageCount = pdf.internal.getNumberOfPages();
@@ -2172,7 +2219,7 @@ const PDFGenerator = {
             }).join('');
 
             return `
-                <tr style="page-break-inside: avoid; page-break-after: auto; orphans: 3; widows: 3;">
+                <tr class="pdf-item-row" style="page-break-inside: avoid; page-break-after: auto; orphans: 3; widows: 3;">
                     <td style="border: 1px solid #000; padding: 10px; text-align: center; width: ${widths.num}%; font-size: 11pt;">.${item.number}</td>
                     <td style="border: 1px solid #000; padding: 10px; text-align: center; width: ${widths.location}%; font-size: 11pt;">${escapeHtml(item.location)}</td>
                     <td style="border: 1px solid #000; padding: 6px; text-align: center; width: ${widths.photo}%; vertical-align: middle;">${photoHtml}</td>
