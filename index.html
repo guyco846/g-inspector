@@ -2040,83 +2040,122 @@ const PDFGenerator = {
      * Generate PDF using html2canvas + jsPDF approach
      * This properly renders Hebrew text and complex layouts
      */
-    async generateFromHTML(tour) {
-        // Create a hidden render container with the report HTML
-        const renderDiv = document.createElement('div');
-        renderDiv.id = 'pdfRenderContainer';
-        renderDiv.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: -9999px;
-            width: 794px;
-            background: white;
-            font-family: Arial, sans-serif;
-            direction: rtl;
-            text-align: right;
-        `;
-        renderDiv.innerHTML = this.buildReportHTML(tour);
-        document.body.appendChild(renderDiv);
+async generateFromHTML(tour) {
+            // Create a hidden render container with the report HTML
+            const renderDiv = document.createElement('div');
+            renderDiv.id = 'pdfRenderContainer';
+            renderDiv.style.cssText = `
+                        position: fixed;
+                                    top: 0;
+                                                left: -9999px;
+                                                            width: 794px;
+                                                                        background: white;
+                                                                                    font-family: Arial, sans-serif;
+                                                                                                direction: rtl;
+                                                                                                            text-align: right;
+                                                                                                                    `;
+            renderDiv.innerHTML = this.buildReportHTML(tour);
+            document.body.appendChild(renderDiv);
 
-        // Wait for images to load
-        await this.waitForImages(renderDiv);
+            // Wait for images to load
+            await this.waitForImages(renderDiv);
 
-        try {
-            // Render to canvas
-            const canvas = await html2canvas(renderDiv, {
-                scale: 2,
-                useCORS: true,
-                logging: false,
-                backgroundColor: '#ffffff'
-            });
+            try {
+                            // Elements that must never be sliced across a page break
+                            // (photo + description live in the same <tr>, so keeping the
+                            // whole row together prevents images/text being cut mid-way)
+                            const unbreakableEls = Array.from(renderDiv.querySelectorAll('tr, img'));
+                            const containerRect = renderDiv.getBoundingClientRect();
+                            const unbreakableRects = unbreakableEls.map(el => {
+                                                const r = el.getBoundingClientRect();
+                                                return { top: r.top - containerRect.top, bottom: r.bottom - containerRect.top };
+                            });
 
-            // Build PDF: split canvas into A4 pages
-            const { jsPDF } = window.jspdf;
-            const pdf = new jsPDF({
-                orientation: 'portrait',
-                unit: 'mm',
-                format: 'a4'
-            });
+                            // Render to canvas
+                            const canvas = await html2canvas(renderDiv, {
+                                                scale: 2,
+                                                useCORS: true,
+                                                logging: false,
+                                                backgroundColor: '#ffffff'
+                            });
 
-            const pageWidth = pdf.internal.pageSize.getWidth();   // 210mm
-            const pageHeight = pdf.internal.pageSize.getHeight(); // 297mm
+                            // Build PDF: split canvas into A4 pages without cutting rows/images
+                            const { jsPDF } = window.jspdf;
+                            const pdf = new jsPDF({
+                                                orientation: 'portrait',
+                                                unit: 'mm',
+                                                format: 'a4'
+                            });
 
-            const imgWidth = pageWidth;
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+                            const pageWidth = pdf.internal.pageSize.getWidth(); // 210mm
+                            const pageHeight = pdf.internal.pageSize.getHeight(); // 297mm
 
-            const totalPages = Math.ceil(imgHeight / pageHeight);
-            let heightLeft = imgHeight;
-            let position = 0;
+                            // Pixels-per-mm (canvas px -> mm), based on the rendered width
+                            const pxPerMm = canvas.width / pageWidth;
+                            const pageHeightPx = pageHeight * pxPerMm;
 
-            // Add first page
-            pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, position, imgWidth, imgHeight);
-            heightLeft -= pageHeight;
+                            // Convert the unbreakable element rects (CSS px) to canvas px
+                            const scaleFactor = canvas.width / renderDiv.offsetWidth;
+                            const unbreakable = unbreakableRects.map(r => ({
+                                                top: r.top * scaleFactor,
+                                                bottom: r.bottom * scaleFactor
+                            }));
 
-            // Add subsequent pages
-            while (heightLeft > 0) {
-                position = heightLeft - imgHeight;
-                pdf.addPage();
-                pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, position, imgWidth, imgHeight);
-                heightLeft -= pageHeight;
-            }
+                            // Compute page-break Y positions (canvas px), nudging any break
+                            // that would fall inside an unbreakable element up to its top
+                            const breakpoints = [];
+                            let cursor = 0;
+                            while (cursor < canvas.height) {
+                                                let nextBreak = Math.min(cursor + pageHeightPx, canvas.height);
+                                                if (nextBreak < canvas.height) {
+                                                                        for (const el of unbreakable) {
+                                                                                                    if (el.top > cursor && el.top < nextBreak && el.bottom > nextBreak) {
+                                                                                                                                    nextBreak = el.top;
+                                                                                                        }
+                                                                        }
+                                                }
+                                                if (nextBreak <= cursor) nextBreak = Math.min(cursor + pageHeightPx, canvas.height);
+                                                breakpoints.push(nextBreak);
+                                                cursor = nextBreak;
+                            }
 
-            // Add page numbers (in Latin chars to avoid encoding issues)
-            const pageCount = pdf.internal.getNumberOfPages();
-            for (let i = 1; i <= pageCount; i++) {
-                pdf.setPage(i);
-                pdf.setFontSize(9);
-                pdf.setTextColor(102, 102, 102);
-                pdf.text(`${i} / ${pageCount}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
-            }
+                            // Render each slice onto its own PDF page
+                            breakpoints.forEach((breakY, idx) => {
+                                                const sliceTop = idx === 0 ? 0 : breakpoints[idx - 1];
+                                                const sliceHeightPx = breakY - sliceTop;
+                                                if (sliceHeightPx <= 0) return;
 
-            // Cleanup
-            document.body.removeChild(renderDiv);
+                                                const pageCanvas = document.createElement('canvas');
+                                                pageCanvas.width = canvas.width;
+                                                pageCanvas.height = sliceHeightPx;
+                                                const ctx = pageCanvas.getContext('2d');
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+                    ctx.drawImage(canvas, 0, sliceTop, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
 
-            // Return as Blob
-            return pdf.output('blob');
-        } catch (e) {
-            document.body.removeChild(renderDiv);
-            throw e;
-        }
+                    if (idx > 0) pdf.addPage();
+                    const sliceHeightMm = sliceHeightPx / pxPerMm;
+                    pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageWidth, sliceHeightMm);
+    });
+
+                // Add page numbers (in Latin chars to avoid encoding issues)
+                const pageCount = pdf.internal.getNumberOfPages();
+                for (let i = 1; i <= pageCount; i++) {
+                    pdf.setPage(i);
+                    pdf.setFontSize(9);
+                    pdf.setTextColor(102, 102, 102);
+                    pdf.text(`${i} / ${pageCount}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
+    }
+
+                // Cleanup
+                document.body.removeChild(renderDiv);
+
+                // Return as Blob
+                return pdf.output('blob');
+    } catch (e) {
+                document.body.removeChild(renderDiv);
+                throw e;
+    }
     },
 
     waitForImages(container) {
