@@ -1209,6 +1209,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         <button class="top-bar-btn" id="googleAuthBtn" onclick="App.toggleGoogleAuth()" data-i18n="app.connectGoogle">
             התחבר לגוגל
         </button>
+        <button class="top-bar-btn" id="profileBtn" onclick="App.showProfile()" data-i18n="app.profile">פרופיל</button>
     </div>
 </header>
 
@@ -1228,6 +1229,24 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
             </div>
             <div class="card-body">
                 <div id="tourListContainer"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- VIEW: Profile / Company Logo -->
+    <div class="view" id="viewProfile">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title" data-i18n="profile.title">פרופיל משתמש</h2>
+                <button class="btn btn-secondary btn-sm" onclick="App.showList()" data-i18n="editor.back">← חזור</button>
+            </div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label class="form-label" data-i18n="profile.logoLabel">לוגו החברה (יופיע בכל עמוד בדוחות ה-PDF)</label>
+                    <div id="companyLogoPreview" style="margin: 10px 0;"></div>
+                    <input type="file" id="companyLogoInput" accept="image/*" onchange="App.handleLogoUpload(event)">
+                    <button class="btn btn-secondary btn-sm" style="margin-top:10px;" onclick="App.removeCompanyLogo()" data-i18n="profile.removeLogo">הסר לוגו</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1560,7 +1579,7 @@ const Settings = {
 
     DEFAULT_SETTINGS: {
         defaultColumns: [], // Array of { id, name } - columns added to every new tour
-        maxCustomColumns: 3 // Max columns allowed per tour (excluding the 4 base columns)
+        maxCustomColumns: 3, companyLogo: null // Max columns allowed per tour (excluding the 4 base columns)
     },
 
     _cache: null,
@@ -1598,6 +1617,14 @@ const Settings = {
 
     getMaxCustomColumns() {
         return this.load().maxCustomColumns || 3;
+    },
+
+        getCompanyLogo() {
+        return this.load().companyLogo || null;
+    },
+
+    setCompanyLogo(dataUrl) {
+            return this.save({ companyLogo: dataUrl });
     }
 };
 
@@ -2119,6 +2146,33 @@ async generateFromHTML(tour) {
                                                 cursor = nextBreak;
                             }
 
+                // Company logo - shown in the top-right corner of every PDF page (per-user setting)
+                const companyLogoUrl = Settings.getCompanyLogo();
+                let logoImg = null, logoW = 0, logoH = 0, logoFormat = 'PNG';
+                if (companyLogoUrl) {
+                    logoImg = await new Promise((resolve) => {
+                        const img = new Image();
+                        img.onload = () => resolve(img);
+                        img.onerror = () => resolve(null);
+                        img.src = companyLogoUrl;
+    });
+    if (logoImg) {
+    const fmtMatch = /^data:image\/(\w+)/.exec(companyLogoUrl);
+    if (fmtMatch) {
+    const ext = fmtMatch[1].toLowerCase();
+    logoFormat = (ext === 'jpg' || ext === 'jpeg') ? 'JPEG' : (ext === 'webp' ? 'WEBP' : 'PNG');
+    }
+    const maxLogoW = 28, maxLogoH = 16;
+    const ratio = logoImg.naturalWidth / logoImg.naturalHeight;
+    logoW = maxLogoW;
+    logoH = logoW / ratio;
+    if (logoH > maxLogoH) {
+    logoH = maxLogoH;
+    logoW = logoH * ratio;
+    }
+    }
+    }
+
                             // Render each slice onto its own PDF page
                             breakpoints.forEach((breakY, idx) => {
                                                 const sliceTop = idx === 0 ? 0 : breakpoints[idx - 1];
@@ -2136,6 +2190,9 @@ async generateFromHTML(tour) {
                     if (idx > 0) pdf.addPage();
                     const sliceHeightMm = sliceHeightPx / pxPerMm;
                     pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageWidth, sliceHeightMm);
+                                if (logoImg) {
+    pdf.addImage(companyLogoUrl, logoFormat, pageWidth - 8 - logoW, 6, logoW, logoH);
+    }
     });
 
                 // Add page numbers (in Latin chars to avoid encoding issues)
@@ -2531,6 +2588,7 @@ const App = {
 
     showEditor() {
         document.getElementById('viewList').classList.remove('active');
+        document.getElementById('viewProfile').classList.remove('active');
         document.getElementById('viewEditor').classList.add('active');
         document.getElementById('fabContainer').style.display = 'flex';
     },
@@ -2540,9 +2598,49 @@ const App = {
             this.saveTour(true);
         }
         document.getElementById('viewEditor').classList.remove('active');
+        document.getElementById('viewProfile').classList.remove('active');
         document.getElementById('viewList').classList.add('active');
         document.getElementById('fabContainer').style.display = 'none';
         this.renderTourList();
+    },
+
+    showProfile() {
+    if (State.isDirty) {
+    this.saveTour(true);
+    }
+    document.getElementById('viewList').classList.remove('active');
+    document.getElementById('viewEditor').classList.remove('active');
+    document.getElementById('viewProfile').classList.add('active');
+    document.getElementById('fabContainer').style.display = 'none';
+    this.renderProfile();
+    },
+
+    renderProfile() {
+    const preview = document.getElementById('companyLogoPreview');
+    const logo = Settings.getCompanyLogo();
+    if (logo) {
+    preview.innerHTML = '<img src="' + logo + '" style="max-width:220px; max-height:120px; border:1px solid #ccc; padding:4px; display:block; background:#fff;">';
+    } else {
+    preview.innerHTML = '<div style="color:#999;">לא הועלה לוגו</div>';
+    }
+    },
+
+    handleLogoUpload(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+    Settings.setCompanyLogo(e.target.result);
+    this.renderProfile();
+    };
+    reader.readAsDataURL(file);
+    },
+
+    removeCompanyLogo() {
+    Settings.setCompanyLogo(null);
+    this.renderProfile();
+    const input = document.getElementById('companyLogoInput');
+    if (input) input.value = '';
     },
 
     renderTourList() {
