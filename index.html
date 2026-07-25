@@ -2425,7 +2425,7 @@ const App = {
             this.newTour();
         } else {
             // Load most recent tour
-            this.loadTour(State.tours[0].id);
+            this.loadTour([...State.tours].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0].id);
         }
 
         // Auto-save every 30 seconds
@@ -3580,6 +3580,20 @@ const App = {
             btn.classList.remove('active');
         }
     },
+
+        refreshUI() {
+                    // Refresh whichever view is currently active so dynamically-rendered
+                    // content (tour list / item cards / template bank) stays in sync
+                    const editorEl = document.getElementById('viewEditor');
+                    if (editorEl && editorEl.classList.contains('active') && State.currentTour) {
+                                    this.renderParticipants();
+                                    this.renderItems();
+                                    this.renderRecipients();
+                                    this.updateCustomColumnsBar();
+                    } else {
+                                    this.renderTourList();
+                    }
+        },
 
     // ============ Modal ============
 
